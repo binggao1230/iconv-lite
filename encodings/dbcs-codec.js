@@ -9,6 +9,12 @@ var NODE_START = -1000
 var UNASSIGNED_NODE = new Array(0x100)
 var DEF_CHAR = -1
 
+// Pointer ranges left unassigned by the WHATWG "index gb18030 ranges" table.
+// https://encoding.spec.whatwg.org/#index-gb18030-ranges-code-point
+var GB18030_GAP_START = 39420
+var GB18030_GAP_END = 189000
+var GB18030_MAX_POINTER = 1237575
+
 for (var i = 0; i < 0x100; i++) { UNASSIGNED_NODE[i] = UNASSIGNED }
 
 // Class DBCSCodec reads and initializes mapping tables.
@@ -467,8 +473,13 @@ class DBCSDecoder {
                             (((i - 1 >= 0) ? buf[i - 1] : prevBytes[i - 1 + prevOffset]) - 0x81) * 10 +
                             (curByte - 0x30)
         }
-        var idx = findIdx(this.gb18030.gbChars, ptr)
-        uCode = this.gb18030.uChars[idx] + ptr - this.gb18030.gbChars[idx]
+        if ((ptr >= GB18030_GAP_START && ptr < GB18030_GAP_END) || ptr > GB18030_MAX_POINTER) {
+          // Unassigned pointer: the ranges table would extrapolate a character that doesn't exist.
+          uCode = this.defaultCharUnicode.charCodeAt(0)
+        } else {
+          var idx = findIdx(this.gb18030.gbChars, ptr)
+          uCode = this.gb18030.uChars[idx] + ptr - this.gb18030.gbChars[idx]
+        }
       } else if (uCode <= NODE_START) { // Go to next trie node.
         nodeIdx = NODE_START - uCode
         continue
