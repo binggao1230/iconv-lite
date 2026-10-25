@@ -1,6 +1,6 @@
 // Multibyte codec. In this scheme, a character is represented by 1 or more bytes.
 // Our codec supports UTF-16 surrogates, extensions for GB18030 and unicode sequences.
-// To save memory and loading time, we read table files only when requested.
+// To save memory and initialization time, we build codec tables only when requested.
 
 var UNASSIGNED = -1
 var GB18030_CODE = -2
@@ -11,9 +11,9 @@ var DEF_CHAR = -1
 
 // Pointer ranges left unassigned by the WHATWG "index gb18030 ranges" table.
 // https://encoding.spec.whatwg.org/#index-gb18030-ranges-code-point
-var GB18030_GAP_START = 39420
-var GB18030_GAP_END = 189000
-var GB18030_MAX_POINTER = 1237575
+const GB18030_GAP_START = 39420
+const GB18030_SUPPLEMENTARY_START = 189000
+const GB18030_MAX_POINTER = 1237575
 
 for (var i = 0; i < 0x100; i++) { UNASSIGNED_NODE[i] = UNASSIGNED }
 
@@ -450,7 +450,6 @@ class DBCSDecoder {
     var prevBytes = this.prevBytes; var prevOffset = this.prevBytes.length
     var seqStart = -this.prevBytes.length // idx of the start of current parsed sequence.
     var uCode
-    var preserveSurrogates = false
 
     for (var i = 0, j = 0; i < buf.length; i++) {
       var curByte = (i >= 0) ? buf[i] : prevBytes[i + prevOffset]
@@ -473,12 +472,14 @@ class DBCSDecoder {
                             (((i - 1 >= 0) ? buf[i - 1] : prevBytes[i - 1 + prevOffset]) - 0x81) * 10 +
                             (curByte - 0x30)
         }
-        if ((ptr >= GB18030_GAP_START && ptr < GB18030_GAP_END) || ptr > GB18030_MAX_POINTER) {
-          // Unassigned pointer: the ranges table would extrapolate a character that doesn't exist.
-          uCode = this.defaultCharUnicode.charCodeAt(0)
-        } else {
+        if (ptr < GB18030_GAP_START) {
           var idx = findIdx(this.gb18030.gbChars, ptr)
           uCode = this.gb18030.uChars[idx] + ptr - this.gb18030.gbChars[idx]
+        } else if (ptr >= GB18030_SUPPLEMENTARY_START && ptr <= GB18030_MAX_POINTER) {
+          // The supplementary range maps linearly to U+10000..U+10FFFF.
+          uCode = 0x10000 + ptr - GB18030_SUPPLEMENTARY_START
+        } else {
+          uCode = this.defaultCharUnicode.charCodeAt(0)
         }
       } else if (uCode <= NODE_START) { // Go to next trie node.
         nodeIdx = NODE_START - uCode
@@ -494,9 +495,6 @@ class DBCSDecoder {
 
       // Write the character to buffer, handling higher planes using surrogate pair.
       if (uCode >= 0x10000) {
-        // Preserve legacy output for out-of-range GB18030 pointers during this refactor.
-        // TextDecoder-based backends would otherwise replace its isolated surrogates.
-        if (uCode > 0x10FFFF) preserveSurrogates = true
         uCode -= 0x10000
         var uCodeLead = 0xD800 | (uCode >> 10)
         newBuf[j++] = uCodeLead
@@ -521,13 +519,6 @@ class DBCSDecoder {
       prevBytes.length = retained
     }
 
-    if (preserveSurrogates) {
-      let result = ""
-      for (let start = 0; start < j; start += 0x1000) {
-        result += String.fromCharCode.apply(null, newBuf.subarray(start, Math.min(start + 0x1000, j)))
-      }
-      return result
-    }
     return this.backend.rawCharsToResult(newBuf, j)
   }
 
